@@ -1,9 +1,10 @@
-// commands.rs — F3 + F6: Parsing + execução + orquestração STT/TTS
+// commands.rs — Parsing + execução de comandos da partida
 // Tauri commands (public) + handlers internos (private)
+// TTS/STT removidos: o frontend lida com áudio e envia texto transcrito via IPC.
 
 use regex::Regex;
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::models::{Match, MatchStatus, CommandExecution, numero_por_extenso};
 use crate::db;
@@ -15,7 +16,6 @@ use crate::AppState;
 #[derive(Debug, Clone, Serialize)]
 pub struct VoiceCommandResult {
     pub response_text: String,
-    pub audio_bytes: Vec<u8>,
     pub command_id: String,
     pub transcription: String,
 }
@@ -23,7 +23,6 @@ pub struct VoiceCommandResult {
 #[derive(Debug, Clone, Serialize)]
 pub struct TextCommandResult {
     pub response_text: String,
-    pub audio_bytes: Vec<u8>,
     pub command_id: String,
 }
 
@@ -89,18 +88,26 @@ pub fn parse_command(text: &str) -> VoiceCommand {
 // ─── Tauri Commands (public, invocáveis pelo frontend) ──────────────
 
 #[tauri::command]
-pub fn start_match(state: State<'_, AppState>) -> Result<String, String> {
+pub fn start_match(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     let mut ms = state.match_state.lock().map_err(|e| e.to_string())?;
 
     let response = cmd_volta_seis(&mut ms, &db);
+
+    // Emit event so frontend can update without polling
+    let _ = app.emit("match_state_changed", ms.match_data.clone());
+    let _ = db::update_match(&db, &ms.match_data);
+
     Ok(response)
 }
 
 #[tauri::command]
 pub fn get_current_match(state: State<'_, AppState>) -> Result<Option<Match>, String> {
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    db::get_current_match(&db).map_err(|e| e.to_string())
+    let ms = state.match_state.lock().map_err(|e| e.to_string())?;
+    Ok(Some(ms.match_data.clone()))
 }
 
 #[tauri::command]
@@ -115,62 +122,42 @@ pub fn get_command_log(state: State<'_, AppState>, match_id: i64) -> Result<Vec<
     db::get_command_log(&db, match_id).map_err(|e| e.to_string())
 }
 
-/// Fluxo completo de comando de voz: STT → parse → execute → TTS
+/// Recebe texto já transcrito do frontend, parseia e executa o comando.
+/// O STT roda no browser (Web Speech API ou similar).
 #[tauri::command]
 pub async fn process_voice_command(
+    app: AppHandle,
     state: State<'_, AppState>,
-    audio_bytes: Vec<u8>,
+    transcription: String,
 ) -> Result<VoiceCommandResult, String> {
-    if audio_bytes.is_empty() {
-        return Err("Áudio vazio — nada para transcrever.".to_string());
-    }
-
-    // 1. STT — CPU-bound, spawn_blocking
-    let audio_clone = audio_bytes.clone();
-    let transcription = tauri::async_runtime::spawn_blocking(move || {
-        crate::stt::transcribe_bytes(&audio_clone)
-            .map_err(|e| format!("falha no STT: {}", e))
-    })
-    .await
-    .map_err(|e| format!("erro na thread de STT: {}", e))??;
-
     if transcription.trim().is_empty() {
-        return Err("Não foi possível transcrever o áudio. Tente falar mais perto do microfone.".to_string());
+        return Err("Transcrição vazia — nada para processar.".to_string());
     }
 
     println!("process_voice_command: transcrição='{}'", transcription);
 
-    // 2. Parse + Execute — rápido, sync, precisa do Mutex
+    // Parse + Execute — sync, precisa do Mutex
     let (response_text, command_id) = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
         let mut ms = state.match_state.lock().map_err(|e| e.to_string())?;
 
         let cmd = parse_command(&transcription);
         let command_id = format!("{:?}", cmd);
-        let response = execute_command(&mut ms, &db, cmd);
+        let response = execute_command(&mut ms, &app, &db, cmd);
         (response, command_id)
     };
 
-    // 3. TTS — CPU-bound, spawn_blocking
-    let tts_text = response_text.clone();
-    let audio_result = tauri::async_runtime::spawn_blocking(move || {
-        crate::tts::speak(&tts_text)
-            .map_err(|e| format!("falha no TTS: {}", e))
-    })
-    .await
-    .map_err(|e| format!("erro na thread de TTS: {}", e))??;
-
     Ok(VoiceCommandResult {
         response_text,
-        audio_bytes: audio_result,
         command_id,
         transcription,
     })
 }
 
-/// Fluxo de comando por texto: parse → execute → TTS (sem STT)
+/// Fluxo de comando por texto direto: parse → execute
 #[tauri::command]
 pub async fn process_text_command(
+    app: AppHandle,
     state: State<'_, AppState>,
     text: String,
 ) -> Result<TextCommandResult, String> {
@@ -178,29 +165,19 @@ pub async fn process_text_command(
         return Err("Texto vazio — nada para processar.".to_string());
     }
 
-    // 1. Parse + Execute — rápido, sync
+    // Parse + Execute — sync
     let (response_text, command_id) = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
         let mut ms = state.match_state.lock().map_err(|e| e.to_string())?;
 
         let cmd = parse_command(&text);
         let command_id = format!("{:?}", cmd);
-        let response = execute_command(&mut ms, &db, cmd);
+        let response = execute_command(&mut ms, &app, &db, cmd);
         (response, command_id)
     };
 
-    // 2. TTS — CPU-bound, spawn_blocking
-    let tts_text = response_text.clone();
-    let audio_result = tauri::async_runtime::spawn_blocking(move || {
-        crate::tts::speak(&tts_text)
-            .map_err(|e| format!("falha no TTS: {}", e))
-    })
-    .await
-    .map_err(|e| format!("erro na thread de TTS: {}", e))??;
-
     Ok(TextCommandResult {
         response_text,
-        audio_bytes: audio_result,
         command_id,
     })
 }
@@ -209,6 +186,7 @@ pub async fn process_text_command(
 
 pub fn execute_command(
     match_state: &mut MatchState,
+    app: &AppHandle,
     conn: &rusqlite::Connection,
     cmd: VoiceCommand,
 ) -> String {
@@ -235,6 +213,9 @@ pub fn execute_command(
         };
         let _ = db::log_command(conn, id, &cmd_name, &response);
     }
+
+    // Emit state change event (replaces polling)
+    let _ = app.emit("match_state_changed", m.clone());
 
     response
 }

@@ -48,16 +48,27 @@ impl Serialize for MatchStatus {
     }
 }
 
+/// Match state sent to the frontend via IPC and events.
+/// Field names are renamed to match the TypeScript `MatchState` interface.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Match {
     pub id: Option<i64>,
+
+    #[serde(rename = "team_a_name")]
     pub time_a_name: String,
+
+    #[serde(rename = "team_b_name")]
     pub time_b_name: String,
+
     pub score_a: i32,
     pub score_b: i32,
     pub status: MatchStatus,
     pub started_at: Option<String>,
+
+    #[serde(rename = "time_total")]
     pub duration_seconds: i32,
+
+    #[serde(rename = "time_elapsed")]
     pub elapsed_seconds: i32,
 }
 
