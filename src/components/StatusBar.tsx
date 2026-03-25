@@ -1,11 +1,22 @@
 export default function StatusBar() {
   return (
     <footer
-      className="w-full py-2 px-4 flex items-center justify-between text-xs text-gray-600"
+      className="w-full py-2 px-6 flex items-center justify-between text-[11px] text-gray-700 border-t border-border-subtle bg-bg-secondary/50"
       role="contentinfo"
     >
-      <span>🔋 Offline — STT via WebSpeech API</span>
-      <span>Tauri v2 + React 19</span>
+      <div className="flex items-center gap-3">
+        <span className="flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 rounded-full bg-accent-green/50" />
+          Offline
+        </span>
+        <span className="text-gray-800">•</span>
+        <span>WebSpeech API (pt-BR)</span>
+      </div>
+      <div className="flex items-center gap-3 text-gray-700">
+        <span>Tauri v2</span>
+        <span className="text-gray-800">•</span>
+        <span>React 19</span>
+      </div>
     </footer>
   );
 }
