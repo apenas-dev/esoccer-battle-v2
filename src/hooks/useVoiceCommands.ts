@@ -132,12 +132,14 @@ export function useVoiceCommands() {
 
   const refreshCommandLog = useCallback(async () => {
     try {
-      const log = await invokeOrMock<CommandLogEntry[]>("get_command_log");
+      // get_command_log needs match_id from current match state
+      const matchId = matchState?.id ?? 0;
+      const log = await invokeOrMock<CommandLogEntry[]>("get_command_log", { matchId });
       if (Array.isArray(log)) setCommandLog(log);
     } catch {
       // ignore
     }
-  }, []);
+  }, [matchState]);
 
   const mic = useMicrophone(handleAudioReady);
 

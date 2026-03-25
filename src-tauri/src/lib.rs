@@ -19,9 +19,50 @@ pub struct AppState {
     pub db: Mutex<rusqlite::Connection>,
 }
 
+#[derive(Debug, serde::Serialize)]
+pub struct ModelsStatus {
+    pub ready: bool,
+    pub missing: Vec<String>,
+    pub found: Vec<String>,
+}
+
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Olá, {}! E-Soccer Battle pronto.", name)
+}
+
+/// Verifica se todos os arquivos de modelo necessários existem.
+/// Retorna status com lista de arquivos encontrados e ausentes.
+#[tauri::command]
+fn check_models_ready() -> ModelsStatus {
+    let models_dir = crate::audio_utils::get_models_dir();
+
+    let required = [
+        ("whisper/encoder_model.onnx", "Whisper Encoder"),
+        ("whisper/decoder_model_merged.onnx", "Whisper Decoder"),
+        ("whisper/tokenizer.json", "Whisper Tokenizer"),
+        ("kokoro/model.onnx", "Kokoro Model"),
+        ("kokoro/tokenizer.json", "Kokoro Tokenizer"),
+        ("voices/pf_dora.bin", "Voz pf_dora"),
+    ];
+
+    let mut found = Vec::new();
+    let mut missing = Vec::new();
+
+    for (rel, label) in &required {
+        let path = models_dir.join(rel);
+        if path.exists() {
+            found.push(label.to_string());
+        } else {
+            missing.push(format!("{} ({})", label, rel));
+        }
+    }
+
+    ModelsStatus {
+        ready: missing.is_empty(),
+        missing,
+        found,
+    }
 }
 
 pub fn run() {
@@ -35,6 +76,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             greet,
+            check_models_ready,
             commands::start_match,
             commands::get_current_match,
             commands::get_match_history,

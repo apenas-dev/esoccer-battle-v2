@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 pub enum MatchStatus {
     Aguardando,
     EmAndamento,
@@ -23,12 +23,28 @@ impl MatchStatus {
     /// Tenta converter string em MatchStatus. Retorna None para valores desconhecidos.
     pub fn try_from_str(s: &str) -> Option<Self> {
         match s {
-            "Aguardando" => Some(MatchStatus::Aguardando),
-            "EmAndamento" => Some(MatchStatus::EmAndamento),
-            "Pausado" => Some(MatchStatus::Pausado),
-            "Encerrado" => Some(MatchStatus::Encerrado),
+            "Aguardando" | "waiting" => Some(MatchStatus::Aguardando),
+            "EmAndamento" | "in_progress" => Some(MatchStatus::EmAndamento),
+            "Pausado" | "paused" => Some(MatchStatus::Pausado),
+            "Encerrado" | "finished" => Some(MatchStatus::Encerrado),
             _ => None,
         }
+    }
+}
+
+/// MatchStatus JSON serialization — uses English keys for frontend compatibility.
+impl Serialize for MatchStatus {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let english = match self {
+            MatchStatus::Aguardando => "waiting",
+            MatchStatus::EmAndamento => "in_progress",
+            MatchStatus::Pausado => "paused",
+            MatchStatus::Encerrado => "finished",
+        };
+        serializer.serialize_str(english)
     }
 }
 

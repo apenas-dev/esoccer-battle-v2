@@ -9,13 +9,46 @@ import LoadingScreen from "./components/LoadingScreen";
 import { useVoiceCommands } from "./hooks/useVoiceCommands";
 import type { MatchHistoryEntry } from "./types";
 
-export default function App() {
-  const [ready, setReady] = useState(false);
+interface ModelsStatus {
+  ready: boolean;
+  missing: string[];
+  found: string[];
+}
 
-  // Simulate initial loading (ONNX models)
+async function checkModels(): Promise<ModelsStatus> {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<ModelsStatus>("check_models_ready");
+  } catch {
+    // Tauri not available (dev mode in browser) — pretend ready
+    return { ready: true, missing: [], found: [] };
+  }
+}
+
+type LoadingPhase = "checking" | "missing" | "loading" | "ready";
+
+export default function App() {
+  const [phase, setPhase] = useState<LoadingPhase>("checking");
+  const [modelsStatus, setModelsStatus] = useState<ModelsStatus | null>(null);
+
+  // Check models on mount
   useEffect(() => {
-    const timer = setTimeout(() => setReady(true), 1500);
-    return () => clearTimeout(timer);
+    checkModels().then((status) => {
+      setModelsStatus(status);
+      if (status.ready) {
+        setPhase("ready");
+      } else {
+        setPhase("missing");
+      }
+    });
+  }, []);
+
+  const handleRetryCheck = useCallback(() => {
+    setPhase("loading");
+    checkModels().then((status) => {
+      setModelsStatus(status);
+      setPhase(status.ready ? "ready" : "missing");
+    });
   }, []);
 
   const {
@@ -56,7 +89,52 @@ export default function App() {
     }
   }, []);
 
-  if (!ready) return <LoadingScreen />;
+  if (phase === "checking" || phase === "loading") return <LoadingScreen />;
+
+  if (phase === "missing" && modelsStatus) {
+    return (
+      <div className="min-h-screen bg-gray-950 text-white flex items-center justify-center p-8">
+        <div className="max-w-md w-full text-center space-y-6">
+          <div className="text-6xl">📦</div>
+          <h1 className="text-2xl font-bold text-red-400">Modelos Não Encontrados</h1>
+          <p className="text-gray-400">
+            Os seguintes arquivos de modelo estão faltando:
+          </p>
+          <ul className="text-left text-sm text-gray-300 space-y-1 bg-gray-900 rounded-lg p-4">
+            {modelsStatus.missing.map((m) => (
+              <li key={m} className="flex items-center gap-2">
+                <span className="text-red-400">✗</span> {m}
+              </li>
+            ))}
+          </ul>
+          {modelsStatus.found.length > 0 && (
+            <>
+              <p className="text-gray-500 text-sm">Já encontrados:</p>
+              <ul className="text-left text-sm text-gray-500 space-y-1">
+                {modelsStatus.found.map((f) => (
+                  <li key={f} className="flex items-center gap-2">
+                    <span className="text-green-400">✓</span> {f}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+          <div className="bg-gray-900 rounded-lg p-4 text-sm text-gray-300">
+            <p className="font-semibold mb-1">Para resolver:</p>
+            <code className="block text-xs text-blue-300 bg-gray-800 p-2 rounded">
+              ./scripts/download-models.sh
+            </code>
+          </div>
+          <button
+            onClick={handleRetryCheck}
+            className="bg-blue-600 hover:bg-blue-500 text-white font-semibold px-6 py-3 rounded-lg transition-colors"
+          >
+            Verificar Novamente
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const displayError = error ?? micError;
 

@@ -194,19 +194,7 @@ pub fn normalize(samples: &mut [f32]) {
 
 /// Procura arquivo relativo ao diretório de modelos ou executável
 pub fn get_model_path(relative: &str) -> Result<std::path::PathBuf> {
-    let exe_dir = std::env::current_exe()
-        .context("não conseguiu determinar diretório do executável")?
-        .parent()
-        .unwrap_or(std::path::Path::new("."))
-        .to_path_buf();
-
-    let candidates = [
-        exe_dir.join(relative),
-        exe_dir.join("..").join(relative),
-        std::env::current_dir().unwrap_or_default().join(relative),
-        std::env::current_dir().unwrap_or_default().join("..").join(relative),
-        std::path::Path::new("/tmp/esoccer-battle-v2/src-tauri").join(relative),
-    ];
+    let candidates = get_model_candidates(relative);
 
     for c in &candidates {
         if c.exists() {
@@ -215,6 +203,46 @@ pub fn get_model_path(relative: &str) -> Result<std::path::PathBuf> {
     }
 
     anyhow::bail!("arquivo de modelo não encontrado: {}", relative)
+}
+
+/// Retorna o diretório base de modelos, sem fallback hardcoded para dev.
+pub fn get_models_dir() -> std::path::PathBuf {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+
+    let candidates = [
+        exe_dir.join("models"),
+        exe_dir.join("../models"),
+        std::env::current_dir().unwrap_or_default().join("models"),
+        std::env::current_dir().unwrap_or_default().join("../models"),
+    ];
+
+    for c in &candidates {
+        if c.is_dir() {
+            return c.clone();
+        }
+    }
+
+    // Fallback: retorna o mais provável (exe_dir/models)
+    exe_dir.join("models")
+}
+
+fn get_model_candidates(relative: &str) -> Vec<std::path::PathBuf> {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+
+    vec![
+        exe_dir.join(relative),
+        exe_dir.join("..").join(relative),
+        std::env::current_dir().unwrap_or_default().join(relative),
+        std::env::current_dir().unwrap_or_default().join("..").join(relative),
+        // Dev fallback
+        std::path::PathBuf::from("/tmp/esoccer-battle-v2/src-tauri").join(relative),
+    ]
 }
 
 /// Lê arquivo binário de floats f32

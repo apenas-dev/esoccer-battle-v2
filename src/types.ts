@@ -1,5 +1,6 @@
 // Match state from backend
 export interface MatchState {
+  id?: number;
   status: "waiting" | "in_progress" | "paused" | "finished";
   score_a: number;
   score_b: number;

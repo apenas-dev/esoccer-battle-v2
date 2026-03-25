@@ -107,6 +107,16 @@ impl WhisperSession {
         // Past KV caches — None significa primeiro passo (usa placeholder zeros)
         let mut cache: Vec<[Option<Vec<f32>>; 4]> = vec![Default::default(); NUM_LAYERS];
 
+        // Pre-allocate and leak layer key names once (needed for static lifetime in ort inputs)
+        let leaked_names: Vec<[&'static str; 4]> = (0..NUM_LAYERS)
+            .map(|layer| [
+                format!("past_key_values.{}.decoder.key", layer).leak() as &'static str,
+                format!("past_key_values.{}.decoder.value", layer).leak() as &'static str,
+                format!("past_key_values.{}.encoder.key", layer).leak() as &'static str,
+                format!("past_key_values.{}.encoder.value", layer).leak() as &'static str,
+            ])
+            .collect();
+
         let enc_tensor = Tensor::from_array((
             [1i64, enc_seq_len as i64, HIDDEN_DIM as i64],
             enc_data.to_vec(),
@@ -147,10 +157,11 @@ impl WhisperSession {
                 let ek_t = Tensor::from_array(([1i64, NUM_HEADS as i64, enc_seq_len as i64, HEAD_DIM as i64], ek))?;
                 let ev_t = Tensor::from_array(([1i64, NUM_HEADS as i64, enc_seq_len as i64, HEAD_DIM as i64], ev))?;
 
-                inputs.push((format!("past_key_values.{}.decoder.key", layer).leak(), dk_t.into()));
-                inputs.push((format!("past_key_values.{}.decoder.value", layer).leak(), dv_t.into()));
-                inputs.push((format!("past_key_values.{}.encoder.key", layer).leak(), ek_t.into()));
-                inputs.push((format!("past_key_values.{}.encoder.value", layer).leak(), ev_t.into()));
+            let names = &leaked_names[layer];
+            inputs.push((names[0], dk_t.into()));
+            inputs.push((names[1], dv_t.into()));
+            inputs.push((names[2], ek_t.into()));
+            inputs.push((names[3], ev_t.into()));
             }
 
             let outputs = self.decoder.run(inputs)?;
@@ -229,17 +240,17 @@ fn extract_f32_data(val: &ort::value::DynValue) -> Result<Vec<f32>> {
 /// Transcreve bytes de áudio (WAV ou WebM/Opus) para texto.
 /// Auto-inicializa o modelo Whisper no primeiro uso.
 pub fn transcribe_bytes(audio_bytes: &[u8]) -> Result<String> {
-    let mut guard = WHISPER.lock().unwrap();
+    let mut guard = WHISPER.lock()
+        .map_err(|e| anyhow::anyhow!("poisoned lock no Whisper singleton: {}", e))?;
     if guard.is_none() {
         *guard = Some(WhisperSession::new().context("falha ao inicializar Whisper")?);
     }
-    let session = guard.as_mut().unwrap();
+    let session = guard.as_mut()
+        .context("Whisper não inicializado")?;
 
-    let samples = if crate::audio_utils::decode_wav_to_samples(audio_bytes).is_ok() {
-        crate::audio_utils::decode_wav_to_samples(audio_bytes)?
-    } else {
-        crate::audio_utils::decode_webm_to_samples(audio_bytes)?
-    };
+    let samples = crate::audio_utils::decode_wav_to_samples(audio_bytes)
+        .or_else(|_| crate::audio_utils::decode_webm_to_samples(audio_bytes))
+        .context("falha ao decodificar áudio (formato não suportado)")?;
     session.transcribe(&samples)
 }
 
@@ -249,7 +260,8 @@ static WHISPER: Mutex<Option<WhisperSession>> = Mutex::new(None);
 
 pub fn load_whisper_model() -> Result<ort::session::Session> {
     let session = WhisperSession::new().context("falha ao carregar Whisper")?;
-    *WHISPER.lock().unwrap() = Some(session);
+    *WHISPER.lock()
+        .map_err(|e| anyhow::anyhow!("poisoned lock no Whisper singleton: {}", e))? = Some(session);
     let models_dir = find_models_dir()?;
     ort::session::builder::SessionBuilder::new()?
         .commit_from_file(models_dir.join("whisper/encoder_model.onnx"))
@@ -257,19 +269,20 @@ pub fn load_whisper_model() -> Result<ort::session::Session> {
 }
 
 pub fn transcribe(_session: &ort::session::Session, samples: &[f32]) -> Result<String> {
-    let mut guard = WHISPER.lock().unwrap();
+    let mut guard = WHISPER.lock()
+        .map_err(|e| anyhow::anyhow!("poisoned lock no Whisper singleton: {}", e))?;
     if guard.is_none() {
         *guard = Some(WhisperSession::new()?);
     }
-    guard.as_mut().unwrap().transcribe(samples)
+    guard.as_mut()
+        .context("Whisper não inicializado")?
+        .transcribe(samples)
 }
 
 pub fn transcribe_audio_bytes(session: &ort::session::Session, audio_bytes: &[u8]) -> Result<String> {
-    let samples = if crate::audio_utils::decode_wav_to_samples(audio_bytes).is_ok() {
-        crate::audio_utils::decode_wav_to_samples(audio_bytes)?
-    } else {
-        crate::audio_utils::decode_webm_to_samples(audio_bytes)?
-    };
+    let samples = crate::audio_utils::decode_wav_to_samples(audio_bytes)
+        .or_else(|_| crate::audio_utils::decode_webm_to_samples(audio_bytes))
+        .context("falha ao decodificar áudio (formato não suportado)")?;
 
     transcribe(session, &samples)
 }
@@ -277,24 +290,10 @@ pub fn transcribe_audio_bytes(session: &ort::session::Session, audio_bytes: &[u8
 // ─── Encontrar diretório de modelos ────────────────────────────────────
 
 fn find_models_dir() -> Result<std::path::PathBuf> {
-    let exe_dir = std::env::current_exe()
-        .context("não conseguiu determinar diretório do executável")?
-        .parent()
-        .unwrap_or(Path::new("."))
-        .to_path_buf();
+    let models_dir = crate::audio_utils::get_models_dir();
 
-    let candidates = [
-        exe_dir.join("models"),
-        exe_dir.join("../models"),
-        std::env::current_dir().unwrap_or_default().join("models"),
-        std::env::current_dir().unwrap_or_default().join("../models"),
-        Path::new("/tmp/esoccer-battle-v2/src-tauri/models").to_path_buf(),
-    ];
-
-    for c in &candidates {
-        if c.join("whisper/encoder_model.onnx").exists() {
-            return Ok(c.clone());
-        }
+    if models_dir.join("whisper/encoder_model.onnx").exists() {
+        return Ok(models_dir);
     }
 
     anyhow::bail!("diretório de modelos Whisper não encontrado")
