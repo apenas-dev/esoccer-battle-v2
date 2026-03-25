@@ -28,9 +28,8 @@ export interface MatchHistoryEntry {
   team_b_name: string;
 }
 
-export interface VoiceResponse {
+export interface CommandResponse {
   response_text: string;
-  audio_bytes: number[];
   command_id: string;
   transcription: string;
 }

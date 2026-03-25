@@ -4,7 +4,7 @@ export default function StatusBar() {
       className="w-full py-2 px-4 flex items-center justify-between text-xs text-gray-600"
       role="contentinfo"
     >
-      <span>🔋 App offline — tudo roda localmente</span>
+      <span>🔋 Offline — STT via WebSpeech API</span>
       <span>Tauri v2 + React 19</span>
     </footer>
   );
