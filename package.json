@@ -4,9 +4,12 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview"
+    "dev": "tauri dev",
+    "dev:web": "vite",
+    "build": "tauri build",
+    "build:web": "tsc && vite build",
+    "preview": "vite preview",
+    "download-models": "bash scripts/download-models.sh"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
