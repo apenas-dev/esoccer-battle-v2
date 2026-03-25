@@ -97,7 +97,7 @@ export default function ScoreBoard({ match }: Props) {
               <div className="flex flex-col items-center gap-1 px-4 sm:px-8">
                 <div className="text-gray-600 text-2xl font-extralight">vs</div>
                 <div className="text-[10px] text-gray-600 uppercase tracking-widest mt-1">
-                  {formatTime(total)} min
+                  {formatTime(total)}
                 </div>
               </div>
 

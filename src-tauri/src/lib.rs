@@ -12,6 +12,9 @@ use tauri::{Manager, Emitter};
 use models::Match;
 use match_state::MatchState;
 
+/// Holds the timer thread's JoinHandle for graceful shutdown.
+pub struct TimerHandle(pub std::sync::Mutex<Option<std::thread::JoinHandle<()>>>);
+
 /// Estado gerenciado pelo Tauri — accessível via `tauri::State<AppState>`
 pub struct AppState {
     pub match_state: Mutex<MatchState>,
@@ -42,12 +45,12 @@ pub fn run() {
             commands::get_command_log,
         ])
         .setup(|app| {
-            // Spawn the timer task — ticks every second and emits match_state_changed
+            // Spawn the timer task — ticks every second and emits match_state_update
             let app_handle = app.handle().clone();
-
-            std::thread::spawn(move || {
+            let timer_handle = std::thread::spawn(move || {
                 use std::time::Duration;
                 let state = app_handle.state::<AppState>();
+                let mut last_elapsed: i32 = -1;
 
                 loop {
                     std::thread::sleep(Duration::from_secs(1));
@@ -63,21 +66,28 @@ pub fn run() {
                     };
 
                     let match_snapshot = ms.match_data.clone();
+                    let current_elapsed = match_snapshot.elapsed_seconds;
                     drop(ms); // release lock before DB access
 
-                    // Persist elapsed time
-                    if let Ok(db) = state.db.lock() {
-                        let _ = db::update_match(&db, &match_snapshot);
-                    }
+                    // Only persist + emit when elapsed_seconds actually changed
+                    if current_elapsed != last_elapsed {
+                        last_elapsed = current_elapsed;
 
-                    // Emit to frontend
-                    let _ = app_handle.emit("match_state_changed", match_snapshot);
+                        if let Ok(db) = state.db.lock() {
+                            let _ = db::update_match(&db, &match_snapshot);
+                        }
+
+                        let _ = app_handle.emit("match_state_update", match_snapshot);
+                    }
 
                     if time_ended {
                         let _ = app_handle.emit("match_time_up", ());
                     }
                 }
             });
+
+            // Store JoinHandle for graceful shutdown
+            app.manage(TimerHandle(std::sync::Mutex::new(Some(timer_handle))));
 
             Ok(())
         })

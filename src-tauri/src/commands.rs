@@ -46,32 +46,47 @@ pub enum VoiceCommand {
 pub fn parse_command(text: &str) -> VoiceCommand {
     let lower = text.to_lowercase().trim().to_string();
 
-    lazy_static::lazy_static! {
-        static ref RE_VOLTA: Regex = Regex::new(
-            r"(volta\s+seis|volta\s+6|começar\s+jogo|iniciar\s+partida|comecar\s+jogo|voltei)"
-        ).unwrap();
-        static ref RE_RESULTADO: Regex = Regex::new(
-            r"(resultado|placar|quanto\s+t[aá]|quanto\s+esta|quantos\s+gols)"
-        ).unwrap();
-        static ref RE_INTERVALO: Regex = Regex::new(
-            r"(intervalo|pausar|parar|pausa)"
-        ).unwrap();
-        static ref RE_DUVIDA: Regex = Regex::new(
-            r"(dúvida\s+agora|duvida\s+agora|duvida|dúvida|marcou\s+dúvida|marcou\s+duvida)"
-        ).unwrap();
-        static ref RE_ENCERRAR: Regex = Regex::new(
-            r"(encerrar|finalizar|terminar|acabar)"
-        ).unwrap();
-        static ref RE_COMANDOS: Regex = Regex::new(
-            r"(comandos|ajuda|o\s+que\s+posso\s+dizer|help)"
-        ).unwrap();
-        static ref RE_GOL_A: Regex = Regex::new(
-            r"(gol\s+(do\s+|pro\s+|para\s+)?time\s*a|ponto\s+(pro\s+|do\s+)?a|gol\s+pro\s+a|gol\s+a)"
-        ).unwrap();
-        static ref RE_GOL_B: Regex = Regex::new(
-            r"(gol\s+(do\s+|pro\s+|para\s+)?time\s*b|ponto\s+(pro\s+|do\s+)?b|gol\s+pro\s+b|gol\s+b)"
-        ).unwrap();
-    }
+    use std::sync::LazyLock;
+    static RE_VOLTA: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(volta\s+seis|volta\s+6|começar\s+jogo|iniciar\s+partida|comecar\s+jogo|voltei)",
+        ).unwrap()
+    });
+    static RE_RESULTADO: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(resultado|placar|quanto\s+t[aá]|quanto\s+esta|quantos\s+gols)",
+        ).unwrap()
+    });
+    static RE_INTERVALO: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(intervalo|pausar|parar|pausa)",
+        ).unwrap()
+    });
+    static RE_DUVIDA: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(dúvida\s+agora|duvida\s+agora|duvida|dúvida|marcou\s+dúvida|marcou\s+duvida)",
+        ).unwrap()
+    });
+    static RE_ENCERRAR: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(encerrar|finalizar|terminar|acabar)",
+        ).unwrap()
+    });
+    static RE_COMANDOS: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(comandos|ajuda|o\s+que\s+posso\s+dizer|help)",
+        ).unwrap()
+    });
+    static RE_GOL_A: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(gol\s+(do\s+|pro\s+|para\s+)?time\s*a|ponto\s+(pro\s+|do\s+)?a|gol\s+pro\s+a|gol\s+a)",
+        ).unwrap()
+    });
+    static RE_GOL_B: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(gol\s+(do\s+|pro\s+|para\s+)?time\s*b|ponto\s+(pro\s+|do\s+)?b|gol\s+pro\s+b|gol\s+b)",
+        ).unwrap()
+    });
 
     if RE_GOL_A.is_match(&lower) { return VoiceCommand::GolTimeA; }
     if RE_GOL_B.is_match(&lower) { return VoiceCommand::GolTimeB; }
@@ -98,7 +113,7 @@ pub fn start_match(
     let response = cmd_volta_seis(&mut ms, &db);
 
     // Emit event so frontend can update without polling
-    let _ = app.emit("match_state_changed", ms.match_data.clone());
+    let _ = app.emit("match_state_update", ms.match_data.clone());
     let _ = db::update_match(&db, &ms.match_data);
 
     Ok(response)
@@ -125,7 +140,7 @@ pub fn get_command_log(state: State<'_, AppState>, match_id: i64) -> Result<Vec<
 /// Recebe texto já transcrito do frontend, parseia e executa o comando.
 /// O STT roda no browser (Web Speech API ou similar).
 #[tauri::command]
-pub async fn process_voice_command(
+pub fn process_voice_command(
     app: AppHandle,
     state: State<'_, AppState>,
     transcription: String,
@@ -142,7 +157,7 @@ pub async fn process_voice_command(
         let mut ms = state.match_state.lock().map_err(|e| e.to_string())?;
 
         let cmd = parse_command(&transcription);
-        let command_id = format!("{:?}", cmd);
+        let command_id = uuid::Uuid::new_v4().to_string();
         let response = execute_command(&mut ms, &app, &db, cmd);
         (response, command_id)
     };
@@ -156,7 +171,7 @@ pub async fn process_voice_command(
 
 /// Fluxo de comando por texto direto: parse → execute
 #[tauri::command]
-pub async fn process_text_command(
+pub fn process_text_command(
     app: AppHandle,
     state: State<'_, AppState>,
     text: String,
@@ -171,7 +186,7 @@ pub async fn process_text_command(
         let mut ms = state.match_state.lock().map_err(|e| e.to_string())?;
 
         let cmd = parse_command(&text);
-        let command_id = format!("{:?}", cmd);
+        let command_id = uuid::Uuid::new_v4().to_string();
         let response = execute_command(&mut ms, &app, &db, cmd);
         (response, command_id)
     };
@@ -215,7 +230,7 @@ pub fn execute_command(
     }
 
     // Emit state change event (replaces polling)
-    let _ = app.emit("match_state_changed", m.clone());
+    let _ = app.emit("match_state_update", m.clone());
 
     response
 }

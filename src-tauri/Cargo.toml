@@ -21,4 +21,4 @@ regex = "1"
 anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 dirs = "6"
-lazy_static = "1"
+uuid = { version = "1", features = ["v4"] }

@@ -5,41 +5,14 @@ import type { CommandResponse, CommandLogEntry, MatchState } from "../types";
 
 export type VoiceCmdState = "idle" | "listening" | "processing" | "error";
 
-async function invokeOrMock<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+async function invokeCommand<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   try {
     const { invoke } = await import("@tauri-apps/api/core");
     return await invoke<T>(cmd, args);
-  } catch {
-    return mockResponse(cmd, args) as T;
+  } catch (err) {
+    console.error(`[invokeCommand] Failed to invoke "${cmd}":`, err);
+    throw new Error(`Tauri invoke "${cmd}" failed: ${err instanceof Error ? err.message : String(err)}`);
   }
-}
-
-function mockResponse(cmd: string, _args?: Record<string, unknown>): unknown {
-  if (cmd === "process_text_command") {
-    return {
-      response_text: "Comando recebido! (modo demo)",
-      command_id: crypto.randomUUID(),
-      transcription: (_args?.text as string) ?? "",
-    };
-  }
-  if (cmd === "get_current_match") {
-    return {
-      status: "waiting",
-      score_a: 0,
-      score_b: 0,
-      time_elapsed: 0,
-      time_total: 360,
-      team_a_name: "Time A",
-      team_b_name: "Time B",
-    };
-  }
-  if (cmd === "get_command_log") {
-    return [];
-  }
-  if (cmd === "get_match_history") {
-    return [];
-  }
-  return null;
 }
 
 export function useVoiceCommands() {
@@ -49,8 +22,10 @@ export function useVoiceCommands() {
   const [error, setError] = useState<string | null>(null);
   const matchStateRef = useRef<MatchState | null>(null);
 
-  // Keep ref in sync
-  matchStateRef.current = matchState;
+  // Keep ref in sync via useEffect (not on every render)
+  useEffect(() => {
+    matchStateRef.current = matchState;
+  }, [matchState]);
 
   // Process a command (text or voice) via backend IPC
   const processCommand = useCallback(async (text: string, commandType: "voice" | "text") => {
@@ -58,7 +33,7 @@ export function useVoiceCommands() {
     setVoiceState("processing");
     setError(null);
     try {
-      const response = await invokeOrMock<CommandResponse>("process_text_command", { text: text.trim() });
+      const response = await invokeCommand<CommandResponse>("process_text_command", { text: text.trim() });
 
       const entry: CommandLogEntry = {
         id: response.command_id,
@@ -93,10 +68,20 @@ export function useVoiceCommands() {
     if (speech.isListening) {
       speech.stop();
     } else {
-      setVoiceState("listening");
       speech.start();
     }
   }, [speech]);
+
+  // Sync voiceState with speech hook's isListening (Bug #1 fix)
+  useEffect(() => {
+    if (speech.isListening) {
+      setVoiceState("listening");
+    } else if (voiceState === "listening") {
+      // Speech stopped but we haven't processed yet — let processCommand's finally handle it,
+      // or reset if we were just listening without a command
+      setVoiceState((prev) => (prev === "listening" ? "idle" : prev));
+    }
+  }, [speech.isListening]);
 
   const sendTextCommand = useCallback((text: string) => {
     processCommand(text, "text");
@@ -116,7 +101,7 @@ export function useVoiceCommands() {
   // Initial fetch of match state
   const refreshMatch = useCallback(async () => {
     try {
-      const match = await invokeOrMock<MatchState>("get_current_match");
+      const match = await invokeCommand<MatchState>("get_current_match");
       setMatchState(match);
     } catch {
       // ignore
@@ -126,7 +111,7 @@ export function useVoiceCommands() {
   const refreshCommandLog = useCallback(async () => {
     try {
       const matchId = matchStateRef.current?.id ?? 0;
-      const log = await invokeOrMock<CommandLogEntry[]>("get_command_log", { matchId });
+      const log = await invokeCommand<CommandLogEntry[]>("get_command_log", { matchId });
       if (Array.isArray(log)) setCommandLog(log);
     } catch {
       // ignore
