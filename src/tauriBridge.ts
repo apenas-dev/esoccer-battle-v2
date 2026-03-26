@@ -179,6 +179,18 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     case "get_command_log":
       return mockCommandLog as T;
 
+    case "transcribe_audio": {
+      // Mock: return a fake transcription based on audio data presence
+      const hasAudio = (args?.audioData as unknown[])?.length > 0;
+      const fakeTexts = ["volta seis", "gol time a", "resultado", "intervalo", "comandos"];
+      const text = hasAudio ? fakeTexts[Math.floor(Math.random() * fakeTexts.length)] : "";
+      addLog("info", `[MOCK] transcribe_audio → "${text}"`);
+      return text as T;
+    }
+
+    case "get_stt_status":
+      return "ready" as T;
+
     case "set_team_names": {
       const teamA = (args?.teamA as string) || "Time A";
       const teamB = (args?.teamB as string) || "Time B";

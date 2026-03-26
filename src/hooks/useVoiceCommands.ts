@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import { useSpeechRecognition } from "./useSpeechRecognition";
+import { useWhisperSTT } from "./useWhisperSTT";
 import { invokeCommand } from "../tauriBridge";
 import { addLog } from "../debugLogger";
 import type { TextCommandResponse, CommandLogEntry, MatchState } from "../types";
@@ -54,41 +54,34 @@ export function useVoiceCommands() {
     } finally {
       processingRef.current = false;
       setVoiceState((prev) => {
-        // If speech is still listening, go to "listening"; otherwise "idle"
-        // We check speechRef below since we don't have direct access here
         return "idle"; // Will be corrected by the sync effect below
       });
     }
   }, []);
 
-  // Speech recognition — sends final transcript as text command
-  const speech = useSpeechRecognition({
-    lang: "pt-BR",
-    continuous: true,
-    interimResults: true,
-    maxRetries: 3,
+  // Whisper STT — sends transcribed text as voice command
+  const whisper = useWhisperSTT({
+    chunkDurationMs: 3000,
+    sampleRate: 16000,
     onFinalResult: (transcript) => {
-      addLog("voice", `Transcrição final recebida: "${transcript}"`);
+      addLog("voice", `Transcrição Whisper: "${transcript}"`);
       processCommand(transcript, "voice");
     },
     onError: (msg) => {
-      addLog("voice", `ERRO: ${msg}`);
+      addLog("voice", `ERRO Whisper: ${msg}`);
       setError(msg);
     },
   });
 
-  // SYNC: Keep voiceState in sync with speech.isListening when not processing
-  // This fixes the bug where voiceState never becomes "listening"
-  const isRecording = speech.isListening;
-
+  // SYNC: Keep voiceState in sync with whisper.isListening when not processing
   useEffect(() => {
     if (processingRef.current) return; // Don't override "processing" state
-    if (speech.isListening) {
+    if (whisper.isListening) {
       setVoiceState("listening");
     } else if (voiceState === "listening") {
       setVoiceState("idle");
     }
-  }, [speech.isListening]); // intentionally only depends on speech.isListening
+  }, [whisper.isListening]); // intentionally only depends on whisper.isListening
 
   // Log voiceState changes
   useEffect(() => {
@@ -105,13 +98,9 @@ export function useVoiceCommands() {
   }, [matchState]);
 
   const toggleRecording = useCallback(() => {
-    addLog("voice", `toggleRecording: isListening=${speech.isListening}`);
-    if (speech.isListening) {
-      speech.stop();
-    } else {
-      speech.start();
-    }
-  }, [speech]);
+    addLog("voice", `toggleRecording: isListening=${whisper.isListening}`);
+    whisper.toggle();
+  }, [whisper]);
 
   const sendTextCommand = useCallback((text: string) => {
     addLog("cmd", `Texto enviado pelo input: "${text}"`);
@@ -203,10 +192,10 @@ export function useVoiceCommands() {
     commandLog,
     error,
     toggleRecording,
-    isRecording,
-    interimTranscript: speech.interimTranscript,
-    speechError: speech.error,
-    speechSupported: speech.supported,
+    isRecording: whisper.isListening,
+    interimTranscript: whisper.interimTranscript,
+    speechSupported: true, // Whisper is always "supported" — just needs models
+    sttModelStatus: whisper.modelStatus,
     sendTextCommand,
     refreshMatch,
     refreshCommandLog,

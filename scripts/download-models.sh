@@ -1,109 +1,58 @@
 #!/bin/bash
-# download-models.sh — baixa modelos ONNX para STT (Whisper) e TTS (Kokoro)
-# Uso: ./scripts/download-models.sh
+# download-models.sh — Download Whisper ONNX models for E-Soccer Battle
+#
+# The encoder_model.onnx and tokenizer.json are in the repo via git LFS.
+# The decoder_model_merged.onnx was removed and needs manual download.
+#
+# Usage: ./scripts/download-models.sh
+#
+# Models should be placed in: src-tauri/models/whisper/
 
-set -e
+set -euo pipefail
 
-MODELS_DIR="src-tauri/models"
-WHISPER_DIR="$MODELS_DIR/whisper"
-KOKORO_DIR="$MODELS_DIR/kokoro"
-VOICES_DIR="$MODELS_DIR/voices"
-mkdir -p "$WHISPER_DIR" "$KOKORO_DIR" "$VOICES_DIR"
+MODEL_DIR="src-tauri/models/whisper"
+mkdir -p "$MODEL_DIR"
 
-echo "=== Download de Modelos ONNX ==="
+echo "=== E-Soccer Battle — Whisper Model Downloader ==="
+echo ""
 
-# ── Whisper Base (encoder + decoder + tokenizer) ──────────────────────
-
-WHISPER_ENCODER_URL="https://huggingface.co/onnx-community/whisper-base/resolve/main/onnx/encoder_model.onnx"
-WHISPER_ENCODER_OUT="$WHISPER_DIR/encoder_model.onnx"
-
-if [ -f "$WHISPER_ENCODER_OUT" ]; then
-    echo "[OK] encoder_model.onnx já existe"
+# Check if encoder exists
+if [ -f "$MODEL_DIR/encoder_model.onnx" ]; then
+    echo "✓ encoder_model.onnx found ($(du -h "$MODEL_DIR/encoder_model.onnx" | cut -f1))"
 else
-    echo "[..] Baixando whisper encoder (~75 MB)..."
-    curl -L -o "$WHISPER_ENCODER_OUT" "$WHISPER_ENCODER_URL" --progress-bar
-    echo "[OK] encoder_model.onnx baixado"
+    echo "✗ encoder_model.onnx missing — restore via: git lfs pull --include='src-tauri/models/whisper/encoder_model.onnx'"
 fi
 
-WHISPER_DECODER_URL="https://huggingface.co/onnx-community/whisper-base/resolve/main/onnx/decoder_model_merged.onnx"
-WHISPER_DECODER_OUT="$WHISPER_DIR/decoder_model_merged.onnx"
-
-if [ -f "$WHISPER_DECODER_OUT" ]; then
-    echo "[OK] decoder_model_merged.onnx já existe"
+# Check if tokenizer exists
+if [ -f "$MODEL_DIR/tokenizer.json" ]; then
+    echo "✓ tokenizer.json found ($(du -h "$MODEL_DIR/tokenizer.json" | cut -f1))"
 else
-    echo "[..] Baixando whisper decoder (~145 MB)..."
-    curl -L -o "$WHISPER_DECODER_OUT" "$WHISPER_DECODER_URL" --progress-bar
-    echo "[OK] decoder_model_merged.onnx baixado"
+    echo "✗ tokenizer.json missing — restore via: git show f4bc577:src-tauri/models/whisper/tokenizer.json > $MODEL_DIR/tokenizer.json"
 fi
 
-WHISPER_TOKENIZER_URL="https://huggingface.co/openai/whisper-base/resolve/main/tokenizer.json"
-WHISPER_TOKENIZER_OUT="$WHISPER_DIR/tokenizer.json"
-
-if [ -f "$WHISPER_TOKENIZER_OUT" ]; then
-    echo "[OK] tokenizer.json já existe"
+# Decoder — needs manual download
+if [ -f "$MODEL_DIR/decoder_model_merged.onnx" ]; then
+    echo "✓ decoder_model_merged.onnx found ($(du -h "$MODEL_DIR/decoder_model_merged.onnx" | cut -f1))"
 else
-    echo "[..] Baixando whisper tokenizer (~0.5 MB)..."
-    curl -L -o "$WHISPER_TOKENIZER_OUT" "$WHISPER_TOKENIZER_URL" --progress-bar
-    echo "[OK] tokenizer.json baixado"
-fi
-
-# ── Kokoro-82M (modelo + tokenizer) ──────────────────────────────────
-
-KOKORO_MODEL_URL="https://huggingface.co/onnx-community/kokoro-82m-onnx/resolve/main/model.onnx"
-KOKORO_MODEL_OUT="$KOKORO_DIR/model.onnx"
-
-if [ -f "$KOKORO_MODEL_OUT" ]; then
-    echo "[OK] kokoro model.onnx já existe"
-else
-    echo "[..] Baixando kokoro-82m model.onnx (~82 MB)..."
-    if curl -L -f -o "$KOKORO_MODEL_OUT" "$KOKORO_MODEL_URL" --progress-bar 2>/dev/null; then
-        echo "[OK] kokoro model.onnx baixado"
-    else
-        echo "[!!] kokoro model.onnx não encontrado na URL esperada"
-        echo "     Execute scripts/convert-kokoro-onnx.py para converter manualmente"
-        rm -f "$KOKORO_MODEL_OUT"
-    fi
-fi
-
-KOKORO_TOKENIZER_URL="https://huggingface.co/onnx-community/kokoro-82m-onnx/resolve/main/tokenizer.json"
-KOKORO_TOKENIZER_OUT="$KOKORO_DIR/tokenizer.json"
-
-if [ -f "$KOKORO_TOKENIZER_OUT" ]; then
-    echo "[OK] kokoro tokenizer.json já existe"
-else
-    echo "[..] Baixando kokoro tokenizer.json..."
-    if curl -L -f -o "$KOKORO_TOKENIZER_OUT" "$KOKORO_TOKENIZER_URL" --progress-bar 2>/dev/null; then
-        echo "[OK] kokoro tokenizer.json baixado"
-    else
-        echo "[!!] kokoro tokenizer.json não encontrado"
-        rm -f "$KOKORO_TOKENIZER_OUT"
-    fi
-fi
-
-# ── Voice pack pf_dora (Portuguese Female Dora) ──────────────────────
-
-VOICE_URL="https://huggingface.co/onnx-community/kokoro-82m-onnx/resolve/main/voices/pf_dora.bin"
-VOICE_OUT="$VOICES_DIR/pf_dora.bin"
-
-if [ -f "$VOICE_OUT" ]; then
-    echo "[OK] pf_dora.bin já existe"
-else
-    echo "[..] Baixando voice pack pf_dora..."
-    if curl -L -f -o "$VOICE_OUT" "$VOICE_URL" --progress-bar 2>/dev/null; then
-        echo "[OK] pf_dora.bin baixado"
-    else
-        echo "[!!] pf_dora.bin não encontrado — TTS funcionará sem voz personalizada"
-        rm -f "$VOICE_OUT"
-    fi
+    echo ""
+    echo "✗ decoder_model_merged.onnx MISSING — this is the main model file (~200MB)"
+    echo ""
+    echo "  To obtain it, you can:"
+    echo ""
+    echo "  Option 1: Export from Hugging Face transformers"
+    echo "    pip install optimum"
+    echo '    optimum export onnx --model openai/whisper-tiny --task automatic-speech-recognition --framework pt "$MODEL_DIR/tmp"'
+    echo "    # Then merge encoder+decoder if needed, or use split models"
+    echo ""
+    echo "  Option 2: Download pre-exported ONNX from Hugging Face"
+    echo "    https://huggingface.co/openai/whisper-tiny/tree/main"
+    echo ""
+    echo "  Option 3: Restore from original LFS (if you have LFS access)"
+    echo "    git lfs fetch --include='src-tauri/models/whisper/decoder_model_merged.onnx'"
+    echo "    git checkout 7bce290 -- src-tauri/models/whisper/decoder_model_merged.onnx"
+    echo ""
+    echo "  Place the file at: $MODEL_DIR/decoder_model_merged.onnx"
 fi
 
 echo ""
-echo "=== Resumo ==="
-echo "Whisper:"
-ls -lh "$WHISPER_DIR/" 2>/dev/null || echo "  (vazio)"
-echo "Kokoro:"
-ls -lh "$KOKORO_DIR/" 2>/dev/null || echo "  (vazio)"
-echo "Voices:"
-ls -lh "$VOICES_DIR/" 2>/dev/null || echo "  (vazio)"
-echo "Tamanho total:"
-du -sh "$MODELS_DIR" 2>/dev/null
+echo "=== Done ==="

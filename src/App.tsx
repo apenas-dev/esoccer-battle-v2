@@ -19,8 +19,8 @@ export default function App() {
     toggleRecording,
     isRecording,
     interimTranscript,
-    speechError,
     speechSupported,
+    sttModelStatus,
     sendTextCommand,
     refreshMatch,
     refreshCommandLog,
@@ -46,7 +46,7 @@ export default function App() {
     }
   }, []);
 
-  const displayError = error ?? speechError;
+  const displayError = error;
 
   // Log mount
   useEffect(() => {
@@ -76,7 +76,7 @@ export default function App() {
           <div className="flex items-center gap-4 text-xs text-gray-500">
             <span className="hidden sm:inline">Narração por voz</span>
             <span className="px-2 py-0.5 bg-bg-card rounded border border-border-subtle text-gray-400">
-              STT: WebSpeech
+              STT: Whisper ONNX
             </span>
             <span className="px-2 py-0.5 bg-bg-card rounded border border-border-subtle text-gray-400">
               {isTauriAvailable() ? "Tauri" : "Mock"}
@@ -102,6 +102,7 @@ export default function App() {
             isRecording={isRecording}
             interimTranscript={interimTranscript}
             speechSupported={speechSupported}
+            sttModelStatus={sttModelStatus}
             onToggle={toggleRecording}
             error={displayError}
             onClearError={clearError}

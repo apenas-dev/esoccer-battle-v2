@@ -10,7 +10,7 @@ export default function StatusBar() {
           Offline
         </span>
         <span className="text-gray-800">•</span>
-        <span>WebSpeech API (pt-BR)</span>
+        <span>Whisper ONNX (pt-BR)</span>
       </div>
       <div className="flex items-center gap-3 text-gray-700">
         <span>Tauri v2</span>

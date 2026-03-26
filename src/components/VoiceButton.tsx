@@ -5,6 +5,7 @@ interface Props {
   isRecording: boolean;
   interimTranscript: string;
   speechSupported: boolean;
+  sttModelStatus?: string;
   onToggle: () => void;
   error: string | null;
   onClearError: () => void;
@@ -45,6 +46,7 @@ export default function VoiceButton({
   isRecording,
   interimTranscript,
   speechSupported,
+  sttModelStatus,
   onToggle,
   error,
   onClearError,
@@ -53,13 +55,18 @@ export default function VoiceButton({
   const canToggle = state === "idle" || isRecording;
   const isActive = state === "listening";
 
+  // Whisper model not loaded warning
+  const modelNotReady = sttModelStatus && sttModelStatus !== "ready";
+
   return (
     <div className="flex flex-col items-center gap-3 flex-shrink-0">
-      {/* Unsupported warning */}
-      {!speechSupported && (
-        <div className="bg-accent-red/10 border border-accent-red/30 rounded-xl px-4 py-3 text-sm text-accent-red/80 text-center max-w-xs">
-          <span className="text-lg block mb-1">⚠️</span>
-          WebSpeech API não disponível. Use a entrada de texto.
+      {/* Model loading warning */}
+      {modelNotReady && (
+        <div className="bg-accent-gold/10 border border-accent-gold/30 rounded-xl px-4 py-3 text-sm text-accent-gold/80 text-center max-w-xs">
+          <span className="text-lg block mb-1">⏳</span>
+          {sttModelStatus === "loading" 
+            ? "Modelo Whisper carregando..." 
+            : "Modelo Whisper não disponível. Use a entrada de texto."}
         </div>
       )}
 
