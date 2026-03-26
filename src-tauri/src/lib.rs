@@ -38,6 +38,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             commands::start_match,
+            commands::start_match_with_names,
+            commands::set_team_names,
             commands::get_current_match,
             commands::get_match_history,
             commands::process_voice_command,

@@ -120,6 +120,62 @@ pub fn start_match(
 }
 
 #[tauri::command]
+pub fn start_match_with_names(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    team_a: String,
+    team_b: String,
+) -> Result<String, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let mut ms = state.match_state.lock().map_err(|e| e.to_string())?;
+
+    let m = db::create_match(&db, &team_a, &team_b)
+        .unwrap_or_else(|_| Match::new(&team_a, &team_b));
+
+    ms.match_data = m;
+    let _ = ms.start();
+
+    let _ = app.emit("match_state_update", ms.match_data.clone());
+    let _ = db::update_match(&db, &ms.match_data);
+
+    Ok(format!("Partida iniciada! {} versus {}. 6 minutos no relógio.", team_a, team_b))
+}
+
+#[tauri::command]
+pub fn set_team_names(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    match_id: Option<i64>,
+    team_a: String,
+    team_b: String,
+) -> Result<String, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let mut ms = state.match_state.lock().map_err(|e| e.to_string())?;
+
+    // If match_id is provided, load that match; otherwise use current match_state
+    if let Some(id) = match_id {
+        if ms.match_data.id == Some(id) {
+            // Already loaded — just update names
+        } else {
+            let loaded = db::get_current_match(&db).map_err(|e| e.to_string())?;
+            if let Some(m) = loaded {
+                if m.id == Some(id) {
+                    ms.match_data = m;
+                }
+            }
+        }
+    }
+
+    ms.match_data.time_a_name = team_a.clone();
+    ms.match_data.time_b_name = team_b.clone();
+
+    let _ = db::update_match(&db, &ms.match_data);
+    let _ = app.emit("match_state_update", ms.match_data.clone());
+
+    Ok(format!("Nomes atualizados: {} versus {}.", team_a, team_b))
+}
+
+#[tauri::command]
 pub fn get_current_match(state: State<'_, AppState>) -> Result<Option<Match>, String> {
     let ms = state.match_state.lock().map_err(|e| e.to_string())?;
     Ok(Some(ms.match_data.clone()))
@@ -244,7 +300,10 @@ fn cmd_volta_seis(match_state: &mut MatchState, conn: &rusqlite::Connection) -> 
     match_state.match_data = m;
     let _ = match_state.start();
 
-    "Partida iniciada! Time A versus Time B. 6 minutos no relógio.".to_string()
+    format!(
+        "Partida iniciada! {} versus {}. 6 minutos no relógio.",
+        match_state.match_data.time_a_name, match_state.match_data.time_b_name
+    )
 }
 
 fn cmd_resultado(match_state: &MatchState) -> String {
@@ -320,7 +379,7 @@ fn cmd_gol(match_state: &mut MatchState, conn: &rusqlite::Connection, time_a: bo
 
     let response = format!(
         "Gol do {}! Placar: {} a {}.",
-        if time_a { "Time A" } else { "Time B" },
+        if time_a { &match_state.match_data.time_a_name } else { &match_state.match_data.time_b_name },
         numero_por_extenso(match_state.match_data.score_a),
         numero_por_extenso(match_state.match_data.score_b),
     );

@@ -25,6 +25,17 @@ export default function App() {
     clearError,
   } = useVoiceCommands();
 
+  const handleStartMatch = useCallback(async (teamA: string, teamB: string) => {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const response = await invoke<string>("start_match_with_names", { teamA, teamB });
+      // Refresh match state after starting
+      await refreshMatch();
+    } catch (err) {
+      console.error("[App] Failed to start match:", err);
+    }
+  }, [refreshMatch]);
+
   const fetchMatchHistory = useCallback(async (): Promise<MatchHistoryEntry[]> => {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
@@ -50,7 +61,7 @@ export default function App() {
               </span>
             )}
             <h1 className="text-lg font-bold tracking-tight">
-              <span className="text-white">E-Soccer</span>
+              <span className="text-white">⚽ E-Soccer</span>
               <span className="text-accent-green ml-1">Battle</span>
             </h1>
           </div>
@@ -69,7 +80,7 @@ export default function App() {
       <main className="flex-1 flex flex-col items-center px-4 py-6 max-w-5xl mx-auto w-full gap-8">
         {/* Scoreboard */}
         <div className="w-full animate-fade-in-up">
-          <ScoreBoard match={matchState} />
+          <ScoreBoard match={matchState} onStartMatch={handleStartMatch} />
         </div>
 
         {/* Voice + Text controls row */}
