@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useSpeechRecognition } from "./useSpeechRecognition";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { CommandResponse, CommandLogEntry, MatchState } from "../types";
+import type { TextCommandResponse, CommandLogEntry, MatchState } from "../types";
 
 export type VoiceCmdState = "idle" | "listening" | "processing" | "error";
 
@@ -21,6 +21,7 @@ export function useVoiceCommands() {
   const [commandLog, setCommandLog] = useState<CommandLogEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const matchStateRef = useRef<MatchState | null>(null);
+  const processingRef = useRef(false);
 
   // Keep ref in sync via useEffect (not on every render)
   useEffect(() => {
@@ -30,10 +31,15 @@ export function useVoiceCommands() {
   // Process a command (text or voice) via backend IPC
   const processCommand = useCallback(async (text: string, commandType: "voice" | "text") => {
     if (!text.trim()) return;
+    if (processingRef.current) {
+      console.warn("[processCommand] Already processing a command, skipping:", text);
+      return;
+    }
+    processingRef.current = true;
     setVoiceState("processing");
     setError(null);
     try {
-      const response = await invokeCommand<CommandResponse>("process_text_command", { text: text.trim() });
+      const response = await invokeCommand<TextCommandResponse>("process_text_command", { text: text.trim() });
 
       const entry: CommandLogEntry = {
         id: response.command_id,
@@ -44,8 +50,11 @@ export function useVoiceCommands() {
       };
       setCommandLog((prev) => [entry, ...prev].slice(0, 50));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Erro ao processar comando");
+      const msg = err instanceof Error ? err.message : "Erro ao processar comando";
+      setError(msg);
+      console.error("[processCommand] Error:", msg, err);
     } finally {
+      processingRef.current = false;
       setVoiceState("idle");
     }
   }, []);
@@ -57,6 +66,7 @@ export function useVoiceCommands() {
     interimResults: true,
     maxRetries: 3,
     onFinalResult: (transcript) => {
+      console.log("[voiceCommands] Final transcript received:", transcript);
       processCommand(transcript, "voice");
     },
     onError: (msg) => {
@@ -72,16 +82,9 @@ export function useVoiceCommands() {
     }
   }, [speech]);
 
-  // Sync voiceState with speech hook's isListening (Bug #1 fix)
-  useEffect(() => {
-    if (speech.isListening) {
-      setVoiceState("listening");
-    } else if (voiceState === "listening") {
-      // Speech stopped but we haven't processed yet — let processCommand's finally handle it,
-      // or reset if we were just listening without a command
-      setVoiceState((prev) => (prev === "listening" ? "idle" : prev));
-    }
-  }, [speech.isListening]);
+  // NO effect syncing voiceState with speech.isListening —
+  // voiceState is now fully managed by processCommand and toggleRecording.
+  // Use isRecording (speech.isListening) directly for listening feedback.
 
   const sendTextCommand = useCallback((text: string) => {
     processCommand(text, "text");

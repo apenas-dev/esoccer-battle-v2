@@ -24,6 +24,7 @@ pub struct VoiceCommandResult {
 pub struct TextCommandResult {
     pub response_text: String,
     pub command_id: String,
+    pub transcription: String,
 }
 
 // ─── Comandos suportados ─────────────────────────────────────────────
@@ -107,16 +108,7 @@ pub fn start_match(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    let mut ms = state.match_state.lock().map_err(|e| e.to_string())?;
-
-    let response = cmd_volta_seis(&mut ms, &db);
-
-    // Emit event so frontend can update without polling
-    let _ = app.emit("match_state_update", ms.match_data.clone());
-    let _ = db::update_match(&db, &ms.match_data);
-
-    Ok(response)
+    start_match_with_names(app, state, "Time A".to_string(), "Time B".to_string())
 }
 
 #[tauri::command]
@@ -250,6 +242,7 @@ pub fn process_text_command(
     Ok(TextCommandResult {
         response_text,
         command_id,
+        transcription: text,
     })
 }
 
@@ -294,16 +287,17 @@ pub fn execute_command(
 // ─── Handlers privados (sem log — delegado a execute_command) ───────
 
 fn cmd_volta_seis(match_state: &mut MatchState, conn: &rusqlite::Connection) -> String {
-    let m = db::create_match(conn, "Time A", "Time B").unwrap_or_else(|_| Match::new("Time A", "Time B"));
+    let team_a = match_state.match_data.time_a_name.clone();
+    let team_b = match_state.match_data.time_b_name.clone();
+    let name_a = if team_a.is_empty() || team_a == "Time A" { "Time A" } else { &team_a };
+    let name_b = if team_b.is_empty() || team_b == "Time B" { "Time B" } else { &team_b };
 
-    // Substitui o estado PRIMEIRO para ter o ID correto
+    let m = db::create_match(conn, name_a, name_b).unwrap_or_else(|_| Match::new(name_a, name_b));
+
     match_state.match_data = m;
     let _ = match_state.start();
 
-    format!(
-        "Partida iniciada! {} versus {}. 6 minutos no relógio.",
-        match_state.match_data.time_a_name, match_state.match_data.time_b_name
-    )
+    format!("Partida iniciada! {} versus {}. 6 minutos no relógio.", name_a, name_b)
 }
 
 fn cmd_resultado(match_state: &MatchState) -> String {

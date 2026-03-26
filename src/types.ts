@@ -33,3 +33,9 @@ export interface CommandResponse {
   command_id: string;
   transcription: string;
 }
+
+/** Response from process_text_command — no transcription field (matches Rust TextCommandResult) */
+export interface TextCommandResponse {
+  response_text: string;
+  command_id: string;
+}

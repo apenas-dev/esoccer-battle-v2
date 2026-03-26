@@ -7,7 +7,8 @@ pub mod db;
 pub mod match_state;
 mod commands;
 
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use tauri::{Manager, Emitter};
 use models::Match;
 use match_state::MatchState;
@@ -49,12 +50,18 @@ pub fn run() {
         .setup(|app| {
             // Spawn the timer task — ticks every second and emits match_state_update
             let app_handle = app.handle().clone();
+            let stop_flag = Arc::new(AtomicBool::new(false));
+            let stop_flag_clone = stop_flag.clone();
             let timer_handle = std::thread::spawn(move || {
                 use std::time::Duration;
                 let state = app_handle.state::<AppState>();
                 let mut last_elapsed: i32 = -1;
 
                 loop {
+                    if stop_flag.load(Ordering::Relaxed) {
+                        break;
+                    }
+
                     std::thread::sleep(Duration::from_secs(1));
 
                     let mut ms = match state.match_state.lock() {
@@ -88,10 +95,23 @@ pub fn run() {
                 }
             });
 
-            // Store JoinHandle for graceful shutdown
+            // Store JoinHandle and stop_flag for graceful shutdown
             app.manage(TimerHandle(std::sync::Mutex::new(Some(timer_handle))));
+            app.manage(stop_flag_clone);
 
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Destroyed = event {
+                let stop_flag = window.state::<Arc<AtomicBool>>();
+                stop_flag.store(true, Ordering::Relaxed);
+                let timer_handle = window.state::<TimerHandle>();
+                if let Ok(mut handle) = timer_handle.0.lock() {
+                    if let Some(h) = handle.take() {
+                        let _ = h.join();
+                    }
+                }
+            }
         })
         .run(tauri::generate_context!())
         .expect("erro ao inicializar Tauri");

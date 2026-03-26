@@ -98,6 +98,7 @@ export function useSpeechRecognition(options: UseSpeechRecognitionOptions = {}) 
       }
 
       if (final) {
+        console.log("[speechRecognition] Final result:", final.trim());
         setInterimTranscript("");
         onFinalResultRef.current?.(final.trim());
       }

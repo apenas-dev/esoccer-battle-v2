@@ -133,10 +133,13 @@ export default function VoiceButton({
 
       {/* Label + wave bars */}
       <div className="flex flex-col items-center gap-2">
-        <span className={`text-xs font-medium uppercase tracking-wider ${isActive ? "text-accent-green" : "text-gray-500"}`}>
+        <span className={`text-xs font-medium uppercase tracking-wider ${isActive ? "text-accent-green" : state === "processing" ? "text-accent-gold" : "text-gray-500"}`}>
           {config.label}
         </span>
         {isActive && <WaveBars />}
+        {state === "processing" && (
+          <div className="w-5 h-5 border-2 border-accent-gold/30 border-t-accent-gold rounded-full animate-spin" />
+        )}
       </div>
 
       {/* Interim transcript */}
