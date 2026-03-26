@@ -110,7 +110,7 @@ pub fn run() {
                     if let Some(h) = handle.take() {
                         let _ = h.join();
                     }
-                }
+                };
             }
         })
         .run(tauri::generate_context!())
