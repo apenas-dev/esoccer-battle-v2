@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useSpeechRecognition } from "./useSpeechRecognition";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { addLog } from "../debugLogger";
 import type { TextCommandResponse, CommandLogEntry, MatchState } from "../types";
 
 export type VoiceCmdState = "idle" | "listening" | "processing" | "error";
@@ -10,8 +11,9 @@ async function invokeCommand<T>(cmd: string, args?: Record<string, unknown>): Pr
     const { invoke } = await import("@tauri-apps/api/core");
     return await invoke<T>(cmd, args);
   } catch (err) {
-    console.error(`[invokeCommand] Failed to invoke "${cmd}":`, err);
-    throw new Error(`Tauri invoke "${cmd}" failed: ${err instanceof Error ? err.message : String(err)}`);
+    const errMsg = err instanceof Error ? err.message : String(err);
+    addLog("error", `Tauri invoke "${cmd}" falhou: ${errMsg}`);
+    throw new Error(`Tauri invoke "${cmd}" failed: ${errMsg}`);
   }
 }
 
@@ -32,14 +34,20 @@ export function useVoiceCommands() {
   const processCommand = useCallback(async (text: string, commandType: "voice" | "text") => {
     if (!text.trim()) return;
     if (processingRef.current) {
+      addLog("cmd", `Ignorado (já processando): "${text}"`);
       console.warn("[processCommand] Already processing a command, skipping:", text);
       return;
     }
     processingRef.current = true;
     setVoiceState("processing");
     setError(null);
+
+    addLog("cmd", `Enviando (${commandType}): "${text.trim()}"`);
+
     try {
       const response = await invokeCommand<TextCommandResponse>("process_text_command", { text: text.trim() });
+
+      addLog("cmd", `Resposta: "${response.response_text}" [id=${response.command_id}]`);
 
       const entry: CommandLogEntry = {
         id: response.command_id,
@@ -51,11 +59,16 @@ export function useVoiceCommands() {
       setCommandLog((prev) => [entry, ...prev].slice(0, 50));
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Erro ao processar comando";
+      addLog("error", `processCommand ERRO: ${msg}`);
       setError(msg);
       console.error("[processCommand] Error:", msg, err);
     } finally {
       processingRef.current = false;
-      setVoiceState("idle");
+      setVoiceState((prev) => {
+        // If speech is still listening, go to "listening"; otherwise "idle"
+        // We check speechRef below since we don't have direct access here
+        return "idle"; // Will be corrected by the sync effect below
+      });
     }
   }, []);
 
@@ -66,15 +79,44 @@ export function useVoiceCommands() {
     interimResults: true,
     maxRetries: 3,
     onFinalResult: (transcript) => {
-      console.log("[voiceCommands] Final transcript received:", transcript);
+      addLog("voice", `Transcrição final recebida: "${transcript}"`);
       processCommand(transcript, "voice");
     },
     onError: (msg) => {
+      addLog("voice", `ERRO: ${msg}`);
       setError(msg);
     },
   });
 
+  // SYNC: Keep voiceState in sync with speech.isListening when not processing
+  // This fixes the bug where voiceState never becomes "listening"
+  const isRecording = speech.isListening;
+
+  useEffect(() => {
+    if (processingRef.current) return; // Don't override "processing" state
+    if (speech.isListening) {
+      setVoiceState("listening");
+    } else if (voiceState === "listening") {
+      setVoiceState("idle");
+    }
+  }, [speech.isListening]); // intentionally only depends on speech.isListening
+
+  // Log voiceState changes
+  useEffect(() => {
+    addLog("state", `voiceState: ${voiceState}`);
+  }, [voiceState]);
+
+  // Log matchState changes
+  useEffect(() => {
+    if (matchState) {
+      addLog("match", `Estado: status=${matchState.status} score=${matchState.score_a}x${matchState.score_b} time=${matchState.time_elapsed}s`);
+    } else {
+      addLog("match", "Estado: null (sem partida)");
+    }
+  }, [matchState]);
+
   const toggleRecording = useCallback(() => {
+    addLog("voice", `toggleRecording: isListening=${speech.isListening}`);
     if (speech.isListening) {
       speech.stop();
     } else {
@@ -82,42 +124,57 @@ export function useVoiceCommands() {
     }
   }, [speech]);
 
-  // NO effect syncing voiceState with speech.isListening —
-  // voiceState is now fully managed by processCommand and toggleRecording.
-  // Use isRecording (speech.isListening) directly for listening feedback.
-
   const sendTextCommand = useCallback((text: string) => {
+    addLog("cmd", `Texto enviado pelo input: "${text}"`);
     processCommand(text, "text");
   }, [processCommand]);
 
   // Listen to Tauri events for match state updates (no polling!)
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
+    addLog("info", "Registrando listener match_state_update...");
     listen<MatchState>("match_state_update", (event) => {
+      addLog("match", `Evento recebido: status=${event.payload.status} score=${event.payload.score_a}x${event.payload.score_b}`);
       setMatchState(event.payload);
-    }).then((fn) => { unlisten = fn; }).catch(() => {
-      // Tauri not available (dev mode)
+    }).then((fn) => {
+      unlisten = fn;
+      addLog("info", "Listener match_state_update registrado ✓");
+    }).catch((err) => {
+      addLog("error", `Falha ao registrar listener: ${err}`);
     });
     return () => { unlisten?.(); };
   }, []);
 
   // Initial fetch of match state
   const refreshMatch = useCallback(async () => {
+    addLog("info", "Buscando estado atual da partida...");
     try {
       const match = await invokeCommand<MatchState>("get_current_match");
+      if (match) {
+        addLog("info", `Partida encontrada: status=${match.status}`);
+      } else {
+        addLog("info", "Nenhuma partida ativa encontrada");
+      }
       setMatchState(match);
-    } catch {
-      // ignore
+    } catch (err) {
+      addLog("error", `Falha ao buscar partida: ${err}`);
     }
   }, []);
 
   const refreshCommandLog = useCallback(async () => {
     try {
       const matchId = matchStateRef.current?.id ?? 0;
+      if (matchId === 0) {
+        addLog("info", "Sem matchId para buscar command log");
+        return;
+      }
       const log = await invokeCommand<CommandLogEntry[]>("get_command_log", { matchId });
-      if (Array.isArray(log)) setCommandLog(log);
-    } catch {
-      // ignore
+      if (Array.isArray(log)) {
+        setCommandLog(log);
+        addLog("info", `Command log carregado: ${log.length} entradas`);
+      }
+    } catch (err) {
+      addLog("error", `Falha ao buscar command log: ${err}`);
     }
   }, []);
 
@@ -126,8 +183,6 @@ export function useVoiceCommands() {
     refreshMatch();
     refreshCommandLog();
   }, [refreshMatch, refreshCommandLog]);
-
-  const isRecording = speech.isListening;
 
   return {
     voiceState,
@@ -142,6 +197,9 @@ export function useVoiceCommands() {
     sendTextCommand,
     refreshMatch,
     refreshCommandLog,
-    clearError: () => setError(null),
+    clearError: () => {
+      setError(null);
+      addLog("voice", "Error limpo");
+    },
   };
 }

@@ -5,6 +5,7 @@ import CommandHistory from "./components/CommandHistory";
 import TextCommandInput from "./components/TextCommandInput";
 import MatchHistory from "./components/MatchHistory";
 import StatusBar from "./components/StatusBar";
+import { DebugPanel, DebugToggle } from "./components/DebugPanel";
 import { useVoiceCommands } from "./hooks/useVoiceCommands";
 import type { MatchHistoryEntry } from "./types";
 
@@ -24,6 +25,8 @@ export default function App() {
     refreshCommandLog,
     clearError,
   } = useVoiceCommands();
+
+  const [debugVisible, setDebugVisible] = useState(false);
 
   const handleStartMatch = useCallback(async (teamA: string, teamB: string) => {
     try {
@@ -46,6 +49,13 @@ export default function App() {
   }, []);
 
   const displayError = error ?? speechError;
+
+  // Log mount
+  useEffect(() => {
+    import("./debugLogger").then(({ addLog }) => {
+      addLog("info", "App montado. Tauri bridge disponível: " + (typeof window !== "undefined" && "__TAURI__" in window));
+    }).catch(() => {});
+  }, []);
 
   return (
     <div className="min-h-screen bg-bg-primary text-white flex flex-col">
@@ -70,6 +80,7 @@ export default function App() {
             <span className="px-2 py-0.5 bg-bg-card rounded border border-border-subtle text-gray-400">
               STT: WebSpeech
             </span>
+            <DebugToggle onClick={() => setDebugVisible((v) => !v)} active={debugVisible} />
           </div>
         </div>
         {/* Accent gradient line */}
@@ -95,7 +106,7 @@ export default function App() {
             onClearError={clearError}
           />
           <div className="flex-1 w-full">
-            <TextCommandInput onSend={sendTextCommand} disabled={voiceState !== "idle"} />
+            <TextCommandInput onSend={sendTextCommand} disabled={voiceState === "processing"} />
           </div>
         </div>
 
@@ -119,6 +130,9 @@ export default function App() {
 
       {/* ── Status Bar ─────────────────────────────── */}
       <StatusBar />
+
+      {/* ── Debug Panel ─────────────────────────────── */}
+      <DebugPanel visible={debugVisible} />
     </div>
   );
 }

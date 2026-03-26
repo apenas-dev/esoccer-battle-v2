@@ -26,8 +26,9 @@ export default function ScoreBoard({ match, onStartMatch }: Props) {
   const elapsed = match?.time_elapsed ?? 0;
   const total = match?.time_total ?? 360;
   const remaining = Math.max(0, total - elapsed);
-  const teamA = match?.team_a_name ?? "Time A";
-  const teamB = match?.team_b_name ?? "Time B";
+  // During match, always show "Time A" / "Time B" — custom names are internal only
+  const teamA = "Time A";
+  const teamB = "Time B";
   const progress = total > 0 ? Math.min(100, (elapsed / total) * 100) : 0;
 
   // Custom team names for pre-match

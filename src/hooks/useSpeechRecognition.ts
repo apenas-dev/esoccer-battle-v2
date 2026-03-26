@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
+import { addLog } from "../debugLogger";
 
 type SpeechRecognitionState = "idle" | "listening" | "error";
 
@@ -70,7 +71,10 @@ export function useSpeechRecognition(options: UseSpeechRecognitionOptions = {}) 
     const SpeechRecognitionCtor = getSpeechRecognition();
     if (!SpeechRecognitionCtor) {
       setSupported(false);
-      setError("WebSpeech API não suportada neste navegador");
+      const msg = "WebSpeech API não suportada neste navegador";
+      setError(msg);
+      addLog("stt", `ERRO: ${msg}`);
+      onErrorRef.current?.(msg);
       return null;
     }
 
@@ -94,10 +98,12 @@ export function useSpeechRecognition(options: UseSpeechRecognitionOptions = {}) 
 
       if (interim) {
         setInterimTranscript(interim);
+        addLog("stt", `Interim: "${interim}"`);
         onInterimResultRef.current?.(interim);
       }
 
       if (final) {
+        addLog("stt", `FINAL: "${final.trim()}"`);
         console.log("[speechRecognition] Final result:", final.trim());
         setInterimTranscript("");
         onFinalResultRef.current?.(final.trim());
@@ -106,26 +112,35 @@ export function useSpeechRecognition(options: UseSpeechRecognitionOptions = {}) 
 
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
       // "no-speech" and "aborted" are not real errors
-      if (event.error === "no-speech" || event.error === "aborted") return;
+      if (event.error === "no-speech" || event.error === "aborted") {
+        addLog("stt", `Evento ignorado: ${event.error}`);
+        return;
+      }
 
       const msg = `SpeechRecognition: ${event.error}`;
+      addLog("stt", `ERRO: ${msg}`);
       setError(msg);
       onErrorRef.current?.(msg);
       setState("error");
     };
 
     recognition.onend = () => {
+      addLog("stt", "Parado (onend disparado)");
+
       // Auto-restart if we should still be listening
       if (shouldListenRef.current && retryCountRef.current < maxRetries) {
         retryCountRef.current++;
+        addLog("stt", `Auto-restart (tentativa ${retryCountRef.current}/${maxRetries})`);
         try {
           recognition.start();
-        } catch {
+        } catch (err) {
+          addLog("stt", `ERRO no auto-restart: ${err}`);
           setState("error");
         }
       } else {
         shouldListenRef.current = false;
         setState("idle");
+        addLog("voice", "Estado: idle (parou de escutar)");
       }
     };
 
@@ -133,6 +148,7 @@ export function useSpeechRecognition(options: UseSpeechRecognitionOptions = {}) 
   }, [lang, continuous, interimResults, maxRetries]);
 
   const start = useCallback(() => {
+    addLog("stt", "Iniciando reconhecimento...");
     const recognition = createRecognition();
     if (!recognition) return;
 
@@ -142,16 +158,21 @@ export function useSpeechRecognition(options: UseSpeechRecognitionOptions = {}) 
     setError(null);
     setInterimTranscript("");
     setState("listening");
+    addLog("voice", "Estado: listening");
 
     try {
       recognition.start();
+      addLog("stt", "Reconhecimento startado com sucesso");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Erro ao iniciar reconhecimento");
+      const msg = err instanceof Error ? err.message : "Erro ao iniciar reconhecimento";
+      addLog("stt", `ERRO ao startar: ${msg}`);
+      setError(msg);
       setState("error");
     }
   }, [createRecognition]);
 
   const stop = useCallback(() => {
+    addLog("stt", "Parando reconhecimento...");
     shouldListenRef.current = false;
     retryCountRef.current = maxRetries; // prevent auto-restart
     setInterimTranscript("");
@@ -164,6 +185,7 @@ export function useSpeechRecognition(options: UseSpeechRecognitionOptions = {}) 
       }
     }
     setState("idle");
+    addLog("voice", "Estado: idle");
   }, [maxRetries]);
 
   const toggle = useCallback(() => {
