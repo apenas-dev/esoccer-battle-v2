@@ -7,7 +7,7 @@ import MatchHistory from "./components/MatchHistory";
 import StatusBar from "./components/StatusBar";
 import { DebugPanel, DebugToggle } from "./components/DebugPanel";
 import { useVoiceCommands } from "./hooks/useVoiceCommands";
-import { invokeCommand, isTauriAvailable } from "./tauriBridge";
+import { invokeCommand } from "./tauriBridge";
 import type { MatchHistoryEntry } from "./types";
 
 export default function App() {
@@ -79,7 +79,7 @@ export default function App() {
               STT: Whisper ONNX
             </span>
             <span className="px-2 py-0.5 bg-bg-card rounded border border-border-subtle text-gray-400">
-              {isTauriAvailable() ? "Tauri" : "Mock"}
+              STT: Whisper ONNX
             </span>
             <DebugToggle onClick={() => setDebugVisible((v) => !v)} active={debugVisible} />
           </div>

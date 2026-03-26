@@ -107,43 +107,29 @@ export function useVoiceCommands() {
     processCommand(text, "text");
   }, [processCommand]);
 
-  // Listen to match state updates (Tauri events OR mock custom events)
+  // Listen to match state updates from Tauri
   useEffect(() => {
     addLog("info", "Registrando listener match_state_update...");
 
     let unlisten: (() => void) | undefined;
 
-    // Listen for mock events (always, for browser dev)
-    const mockHandler = ((e: CustomEvent) => {
-      addLog("match", `Evento Mock: status=${e.detail.status} score=${e.detail.score_a}x${e.detail.score_b}`);
-      setMatchState(e.detail);
-    }) as EventListener;
-    window.addEventListener("mock-match-state-update", mockHandler);
-
-    // If Tauri is available, also listen to real Tauri events
-    if (typeof window !== "undefined" && "__TAURI__" in window) {
-      addLog("info", "Tauri detectado — registrando listener match_state_update...");
-      import("@tauri-apps/api/event")
-        .then(({ listen }) =>
-          listen<MatchState>("match_state_update", (event) => {
-            addLog("match", `Evento Tauri: status=${event.payload.status} score=${event.payload.score_a}x${event.payload.score_b}`);
-            setMatchState(event.payload);
-          })
-        )
-        .then((fn) => {
-          unlisten = () => fn();
-          addLog("info", "Listener Tauri match_state_update registrado ✓");
+    import("@tauri-apps/api/event")
+      .then(({ listen }) =>
+        listen<MatchState>("match_state_update", (event) => {
+          addLog("match", `Evento Tauri: status=${event.payload.status} score=${event.payload.score_a}x${event.payload.score_b}`);
+          setMatchState(event.payload);
         })
-        .catch((err) => {
-          addLog("error", `Falha listener Tauri: ${err}`);
-        });
-    } else {
-      addLog("info", "Usando mock events (sem Tauri)");
-    }
+      )
+      .then((fn) => {
+        unlisten = () => fn();
+        addLog("info", "Listener Tauri match_state_update registrado ✓");
+      })
+      .catch((err) => {
+        addLog("error", `Falha listener Tauri: ${err}`);
+      });
 
     return () => {
       unlisten?.();
-      window.removeEventListener("mock-match-state-update", mockHandler);
     };
   }, []);
 
