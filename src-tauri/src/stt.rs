@@ -1,5 +1,6 @@
-// STT — Speech-to-Text via Whisper ONNX (encoder + decoder separados)
-// Implementação: mel spectrogram, greedy decode com KV-cache, tokenizer
+// STT — Speech-to-Text via Whisper ONNX (encoder + decoder como caixa preta)
+// Black-box ONNX inference: sem atenção manual, sem KV-cache.
+// Compatível com whisper-tiny (hidden_dim=384) exportado via optimum.
 
 use anyhow::{Context, Result};
 use ort::value::Tensor;
@@ -17,11 +18,8 @@ const N_MELS: usize = 80;
 const N_FRAMES: usize = 3000; // 30s
 const FMIN: f32 = 0.0;
 const FMAX: f32 = 8000.0;
-const NUM_LAYERS: usize = 6;
-const NUM_HEADS: usize = 8;
-const HEAD_DIM: usize = 64;
-const HIDDEN_DIM: usize = NUM_HEADS * HEAD_DIM; // 512
 const MAX_TOKENS: usize = 224;
+const VOCAB_SIZE: usize = 51865;
 
 // Tokens especiais Whisper
 const TOKEN_SOT: i64 = 50258;
@@ -43,7 +41,11 @@ impl WhisperSession {
         let decoder_path = models_dir.join("whisper/decoder_model_merged.onnx");
         let tokenizer_path = models_dir.join("whisper/tokenizer.json");
 
-        for (name, path) in [("encoder", encoder_path.as_path()), ("decoder", decoder_path.as_path()), ("tokenizer", tokenizer_path.as_path())] {
+        for (name, path) in [
+            ("encoder", encoder_path.as_path()),
+            ("decoder", decoder_path.as_path()),
+            ("tokenizer", tokenizer_path.as_path()),
+        ] {
             if !path.exists() {
                 anyhow::bail!("{} não encontrado: {:?}", name, path);
             }
@@ -62,7 +64,11 @@ impl WhisperSession {
         let vocab = load_vocab(&tokenizer_path)?;
         println!("Whisper carregado: vocab={}", vocab.len());
 
-        Ok(Self { encoder, decoder, vocab })
+        Ok(Self {
+            encoder,
+            decoder,
+            vocab,
+        })
     }
 
     /// Transcreve samples f32 16kHz mono para texto
@@ -71,123 +77,77 @@ impl WhisperSession {
             return Ok(String::new());
         }
 
-        println!("STT: {} samples ({}s)", samples.len(), samples.len() as f32 / 16000.0);
+        println!(
+            "STT: {} samples ({}s)",
+            samples.len(),
+            samples.len() as f32 / 16000.0
+        );
 
         let mel = compute_mel_spectrogram(samples)
             .context("falha ao calcular mel spectrogram")?;
 
-        // 1. Encoder: [1, 80, 3000] → [1, 1500, 512]
-        let mel_tensor = Tensor::from_array(([1i64, N_MELS as i64, N_FRAMES as i64], mel))
-            .context("falha ao criar tensor mel")?;
+        // 1. Encoder: [1, 80, 3000] → [1, 1500, 384]
+        let mel_tensor =
+            Tensor::from_array(([1i64, N_MELS as i64, N_FRAMES as i64], mel.clone()))
+                .context("falha ao criar tensor mel")?;
 
-        let enc_data = {
-            let enc_outputs = self.encoder.run(vec![("input_features", mel_tensor)])?;
-            let enc_hidden = enc_outputs.get("last_hidden_state")
-                .context("encoder não produziu last_hidden_state")?;
-            let data = extract_f32_data(enc_hidden)?;
-            let seq = data.len() / HIDDEN_DIM;
-            println!("Encoder output: [1, {}, {}]", seq, HIDDEN_DIM);
-            (data, seq)
-        };
+        let enc_outputs = self
+            .encoder
+            .run(ort::inputs!["input_features" => mel_tensor])?;
+        let enc_hidden = enc_outputs
+            .get("last_hidden_state")
+            .context("encoder não produziu last_hidden_state")?;
 
-        // 2. Greedy decode
-        let text = self.greedy_decode(&enc_data.0, enc_data.1)?;
+        let (enc_shape, enc_data) = enc_hidden
+            .try_extract_tensor::<f32>()
+            .context("falha ao extrair encoder output como f32")?;
+        println!(
+            "Encoder output: shape={:?}",
+            enc_shape
+        );
 
-        println!("STT: '{}'", text);
-        Ok(text)
-    }
-
-    fn greedy_decode(
-        &mut self,
-        enc_data: &[f32],
-        enc_seq_len: usize,
-    ) -> Result<String> {
-        let mut generated: Vec<i64> = vec![TOKEN_SOT, TOKEN_NOTIMESTAMPS];
-
-        // Past KV caches — None significa primeiro passo (usa placeholder zeros)
-        let mut cache: Vec<[Option<Vec<f32>>; 4]> = vec![Default::default(); NUM_LAYERS];
-
+        // Precisamos manter encoder_hidden_states como tensor reutilizável
+        let enc_seq_len = enc_shape[1] as i64;
+        let hidden_dim = enc_shape[2] as i64;
         let enc_tensor = Tensor::from_array((
-            [1i64, enc_seq_len as i64, HIDDEN_DIM as i64],
+            [1i64, enc_seq_len, hidden_dim],
             enc_data.to_vec(),
-        ))?;
+        ))
+        .context("falha ao criar tensor encoder_hidden_states")?;
+
+        // 2. Greedy decode sem cache — passamos todos os tokens a cada step
+        let mut input_ids: Vec<i64> = vec![TOKEN_SOT, TOKEN_NOTIMESTAMPS];
 
         for _step in 0..MAX_TOKENS {
-            let last_token = *generated.last().unwrap();
-            if last_token == TOKEN_EOT {
-                break;
-            }
+            let seq_len = input_ids.len() as i64;
+            let ids_tensor = Tensor::from_array(([1i64, seq_len], input_ids.clone()))?;
 
-            // Inputs para este passo
-            let input_ids = Tensor::from_array(([1i64, 1i64], vec![last_token]))?;
-            let use_cache = Tensor::from_array(([1i64], vec![1i64]))?;
+            let dec_outputs = self.decoder.run(ort::inputs![
+                "input_ids" => ids_tensor,
+                "encoder_hidden_states" => enc_tensor.clone()
+            ])?;
 
-            let mut inputs: Vec<(&str, ort::value::Value)> = vec![
-                ("input_ids".into(), input_ids.into()),
-                ("encoder_hidden_states".into(), enc_tensor.clone().into()),
-                ("use_cache_branch".into(), use_cache.into()),
-            ];
-
-            for layer in 0..NUM_LAYERS {
-                // Decoder past: shape [1, 8, dec_past_seq, 64]
-                // No primeiro passo, usamos zeros com seq=1 como placeholder
-                let dec_seq = if cache[layer][0].is_some() {
-                    cache[layer][0].as_ref().unwrap().len() / (NUM_HEADS * HEAD_DIM)
-                } else {
-                    1 // placeholder
-                };
-
-                let dk = cache[layer][0].clone().unwrap_or_else(|| vec![0.0; NUM_HEADS * 1 * HEAD_DIM]);
-                let dv = cache[layer][1].clone().unwrap_or_else(|| vec![0.0; NUM_HEADS * 1 * HEAD_DIM]);
-                let ek = cache[layer][2].clone().unwrap_or_else(|| vec![0.0; NUM_HEADS * enc_seq_len * HEAD_DIM]);
-                let ev = cache[layer][3].clone().unwrap_or_else(|| vec![0.0; NUM_HEADS * enc_seq_len * HEAD_DIM]);
-
-                let dk_t = Tensor::from_array(([1i64, NUM_HEADS as i64, dec_seq as i64, HEAD_DIM as i64], dk))?;
-                let dv_t = Tensor::from_array(([1i64, NUM_HEADS as i64, dec_seq as i64, HEAD_DIM as i64], dv))?;
-                let ek_t = Tensor::from_array(([1i64, NUM_HEADS as i64, enc_seq_len as i64, HEAD_DIM as i64], ek))?;
-                let ev_t = Tensor::from_array(([1i64, NUM_HEADS as i64, enc_seq_len as i64, HEAD_DIM as i64], ev))?;
-
-                inputs.push((format!("past_key_values.{}.decoder.key", layer).leak(), dk_t.into()));
-                inputs.push((format!("past_key_values.{}.decoder.value", layer).leak(), dv_t.into()));
-                inputs.push((format!("past_key_values.{}.encoder.key", layer).leak(), ek_t.into()));
-                inputs.push((format!("past_key_values.{}.encoder.value", layer).leak(), ev_t.into()));
-            }
-
-            let outputs = self.decoder.run(inputs)?;
-
-            // Primeiro output = logits
-            let logits_val = outputs.get("logits")
+            let logits_val = dec_outputs
+                .get("logits")
                 .context("decoder não produziu logits")?;
-            let logits_data = extract_f32_data(logits_val)?;
+            let (_logits_shape, logits_data) = logits_val
+                .try_extract_tensor::<f32>()
+                .context("falha ao extrair logits como f32")?;
 
-            // Pegar logits do último (único) token
-            let vocab_size = 51865;
-            let next_token = argmax(&logits_data[..vocab_size]) as i64;
-            generated.push(next_token);
-
-            // Extrair present KV caches dos outputs
-            for layer in 0..NUM_LAYERS {
-                let names = [
-                    format!("present.{}.decoder.key", layer),
-                    format!("present.{}.decoder.value", layer),
-                    format!("present.{}.encoder.key", layer),
-                    format!("present.{}.encoder.value", layer),
-                ];
-                for (i, name) in names.iter().enumerate() {
-                    let val = outputs.get(name.as_str())
-                        .with_context(|| format!("decoder não produziu {}", name))?;
-                    let data = extract_f32_data(val)?;
-                    cache[layer][i] = Some(data);
-                }
-            }
+            // Pegar logits do último token (última linha da dimensão seq)
+            let last_token_offset = (input_ids.len() - 1) * VOCAB_SIZE;
+            let next_token =
+                argmax(&logits_data[last_token_offset..last_token_offset + VOCAB_SIZE]) as i64;
 
             if next_token == TOKEN_EOT {
                 break;
             }
+
+            input_ids.push(next_token);
         }
 
-        // Converter tokens para texto
-        let text: String = generated
+        // 3. Converter tokens para texto
+        let text: String = input_ids
             .iter()
             .skip(1) // pular SOT
             .take_while(|&&t| t != TOKEN_EOT && t != TOKEN_NOTIMESTAMPS)
@@ -200,28 +160,9 @@ impl WhisperSession {
             .trim()
             .to_lowercase();
 
+        println!("STT: '{}'", text);
         Ok(text)
     }
-}
-
-// ─── Helper: extrair tensor f32 de DynValue ────────────────────────────
-
-/// Extrai dados f32 de um DynValue (tensor genérico)
-fn extract_f32_data(val: &ort::value::DynValue) -> Result<Vec<f32>> {
-    // DynTensor = Value<DynTensorValueType>
-    let tensor_ref = val.downcast_ref::<ort::value::DynTensorValueType>()
-        .context("valor não é um tensor")?;
-
-    let data_ptr = tensor_ref.data_ptr() as *const f32;
-    let shape = tensor_ref.shape();
-    let len: usize = shape.iter().map(|&d| d as usize).product();
-
-    if len == 0 {
-        return Ok(Vec::new());
-    }
-
-    let slice = unsafe { std::slice::from_raw_parts(data_ptr, len) };
-    Ok(slice.to_vec())
 }
 
 // ─── API pública (session-less, usa singleton interno) ─────────────────
@@ -243,7 +184,7 @@ pub fn transcribe_bytes(audio_bytes: &[u8]) -> Result<String> {
     session.transcribe(&samples)
 }
 
-// ─── Compatibilidade com API antiga ────────────────────────────────────
+// ─── Singleton ─────────────────────────────────────────────────────────
 
 static WHISPER: Mutex<Option<WhisperSession>> = Mutex::new(None);
 
@@ -264,7 +205,10 @@ pub fn transcribe(_session: &ort::session::Session, samples: &[f32]) -> Result<S
     guard.as_mut().unwrap().transcribe(samples)
 }
 
-pub fn transcribe_audio_bytes(session: &ort::session::Session, audio_bytes: &[u8]) -> Result<String> {
+pub fn transcribe_audio_bytes(
+    session: &ort::session::Session,
+    audio_bytes: &[u8],
+) -> Result<String> {
     let samples = if crate::audio_utils::decode_wav_to_samples(audio_bytes).is_ok() {
         crate::audio_utils::decode_wav_to_samples(audio_bytes)?
     } else {
@@ -306,8 +250,8 @@ fn load_vocab(path: &Path) -> Result<HashMap<i64, String>> {
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("falha ao ler {:?}", path))?;
 
-    let json: serde_json::Value = serde_json::from_str(&content)
-        .context("falha ao parsear tokenizer.json")?;
+    let json: serde_json::Value =
+        serde_json::from_str(&content).context("falha ao parsear tokenizer.json")?;
 
     let mut vocab = HashMap::new();
 
@@ -353,7 +297,11 @@ fn compute_mel_spectrogram(samples: &[f32]) -> Result<Vec<f32>> {
 
     // Janela Hann
     let window: Vec<f32> = (0..N_FFT)
-        .map(|i| 0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / (N_FFT - 1) as f32).cos()))
+        .map(|i| {
+            0.5
+                * (1.0
+                    - (2.0 * std::f32::consts::PI * i as f32 / (N_FFT - 1) as f32).cos())
+        })
         .collect();
 
     let mel_fb = create_mel_filterbank();
@@ -367,7 +315,11 @@ fn compute_mel_spectrogram(samples: &[f32]) -> Result<Vec<f32>> {
     for frame in 0..N_FRAMES {
         let start = frame * HOP_LENGTH;
         for i in 0..N_FFT {
-            let s = if start + i < padded.len() { padded[start + i] } else { 0.0 };
+            let s = if start + i < padded.len() {
+                padded[start + i]
+            } else {
+                0.0
+            };
             buf[i] = rustfft::num_complex::Complex32::new(s * window[i], 0.0);
         }
         fft.process(&mut buf);
@@ -415,17 +367,25 @@ fn create_mel_filterbank() -> Vec<Vec<f32>> {
         let fc = fft_bins[m + 1] as usize;
         let fr = fft_bins[m + 2] as usize;
         for k in fl..fc.min(half) {
-            if fc != fl { fb[m][k] = (k as f32 - fl as f32) / (fc as f32 - fl as f32); }
+            if fc != fl {
+                fb[m][k] = (k as f32 - fl as f32) / (fc as f32 - fl as f32);
+            }
         }
         for k in fc..fr.min(half) {
-            if fr != fc { fb[m][k] = (fr as f32 - k as f32) / (fr as f32 - fc as f32); }
+            if fr != fc {
+                fb[m][k] = (fr as f32 - k as f32) / (fr as f32 - fc as f32);
+            }
         }
     }
     fb
 }
 
-fn hz_to_mel(hz: f32) -> f32 { 2595.0 * (1.0 + hz / 700.0).ln() }
-fn mel_to_hz(mel: f32) -> f32 { 700.0 * (mel / 2595.0).exp() - 700.0 }
+fn hz_to_mel(hz: f32) -> f32 {
+    2595.0 * (1.0 + hz / 700.0).ln()
+}
+fn mel_to_hz(mel: f32) -> f32 {
+    700.0 * (mel / 2595.0).exp() - 700.0
+}
 
 fn argmax(data: &[f32]) -> usize {
     data.iter()
