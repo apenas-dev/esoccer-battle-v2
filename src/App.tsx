@@ -7,6 +7,7 @@ import MatchHistory from "./components/MatchHistory";
 import StatusBar from "./components/StatusBar";
 import { DebugPanel, DebugToggle } from "./components/DebugPanel";
 import { useVoiceCommands } from "./hooks/useVoiceCommands";
+import { invokeCommand, isTauriAvailable } from "./tauriBridge";
 import type { MatchHistoryEntry } from "./types";
 
 export default function App() {
@@ -30,9 +31,7 @@ export default function App() {
 
   const handleStartMatch = useCallback(async (teamA: string, teamB: string) => {
     try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      const response = await invoke<string>("start_match_with_names", { teamA, teamB });
-      // Refresh match state after starting
+      await invokeCommand<string>("start_match_with_names", { teamA, teamB });
       await refreshMatch();
     } catch (err) {
       console.error("[App] Failed to start match:", err);
@@ -41,8 +40,7 @@ export default function App() {
 
   const fetchMatchHistory = useCallback(async (): Promise<MatchHistoryEntry[]> => {
     try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      return await invoke<MatchHistoryEntry[]>("get_match_history");
+      return await invokeCommand<MatchHistoryEntry[]>("get_match_history");
     } catch {
       return [];
     }
@@ -79,6 +77,9 @@ export default function App() {
             <span className="hidden sm:inline">Narração por voz</span>
             <span className="px-2 py-0.5 bg-bg-card rounded border border-border-subtle text-gray-400">
               STT: WebSpeech
+            </span>
+            <span className="px-2 py-0.5 bg-bg-card rounded border border-border-subtle text-gray-400">
+              {isTauriAvailable() ? "Tauri" : "Mock"}
             </span>
             <DebugToggle onClick={() => setDebugVisible((v) => !v)} active={debugVisible} />
           </div>
